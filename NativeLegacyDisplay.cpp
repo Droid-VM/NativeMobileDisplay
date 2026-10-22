@@ -203,14 +203,17 @@ public:
     // The render server paces its display timer by the minimum refresh interval in IOMFBDisplayRefresh (int-209: no vsync client ever
     // registered, frames came every 16.7 ms), and the generic slot 301 fixes it at 1/60 s. With sheng-vsync=<Hz> it reports the panel's
     // own rate instead; the maximum interval and the step keep the original values. Words in 32.32 seconds, then their mach times.
+    // The original maximum interval is 1/24 s (int-240), which offers the render server a 24 to sheng-vsync Hz range. The panel has no
+    // variable refresh, so sheng-vsync-fixed=1 reports the maximum interval equal to the minimum: one fixed rate.
     bool getRefreshAttributes(uint64_t *words,bool fixed) override {
         if(!IOMobileFramebufferLegacy::getRefreshAttributes(words,fixed) || !words)return false;
         unsigned hz=0;PE_parse_boot_argn("sheng-vsync",&hz,sizeof(hz));
         if(hz<=60 || hz>240)return true;
+        unsigned locked=0;PE_parse_boot_argn("sheng-vsync-fixed",&locked,sizeof(locked));
         const uint64_t interval=(1ull<<32)/hz;
         uint64_t machTime=0;nanoseconds_to_absolutetime(interval*1000000000ull>>32,&machTime);
         words[0]=interval;words[1]=machTime;
-        if(fixed){words[2]=interval;words[3]=machTime;}
+        if(fixed || locked==1){words[2]=interval;words[3]=machTime;}
         native_legacy_vsync_observed(5,hz);
         return true;
     }
