@@ -67,6 +67,8 @@ static void noteSurface(OSObject *surface,IOMemoryDescriptor *memory)
 extern "C" void native_legacy_gpu_fallback_observed(int status);
 // Swaps retired when the GPU client took the frame (before its copy finished), and copies that then failed after such a retirement.
 extern "C" {volatile uint64_t native_legacy_early_retires,native_legacy_early_failures;}
+// Swaps the family gave up on after waiting 5 s for them (cancelSwapsAfterTimeout).
+extern "C" {volatile uint64_t native_legacy_swap_timeouts;}
 // Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
 // through native_legacy_vsync_notify, the unchanged original sender, but only a platform subclass calls it from the panel's vblank and
 // that subclass is not part of this port: without it the render server never saw a vsync. The GOP scanout has no vblank interrupt, so a
@@ -538,6 +540,18 @@ public:
         transferred=false;
         kickSwapQueue();
     }
+    // swap_wait_gated gives up on a swap that has not completed in 5 s ("CommandWake didn't happen even after 5 seconds ... cancelling
+    // swaps": a GPU producer that never finished, a scanout that never retired) and calls this first, then cancels its own queue (slot
+    // 346). The platform's part here is to forget the swaps this class tracks: a GPU copy that ends later finds no request
+    // (finishGpuSwap), and a request the family cancelled is no longer its queue's head (activateOnlyPendingSwap), so nothing is completed
+    // twice, and the next frame is not held behind the cancelled one. The family only logs the result. This slot used to be a guard that
+    // panicked the kernel: a render server slow enough to miss one swap by 5 s took the guest down.
+    bool cancelSwapsAfterTimeout() override {
+        native_legacy_swap_timeouts=native_legacy_swap_timeouts+1;
+        for(auto &entry: validated)entry=nullptr;
+        gpuRequest=nullptr;gpuRetired=false;transferred=false;
+        return true;
+    }
     IOReturn collectCompletionReports(uint32_t,void *,uint32_t *count,uint32_t) override {
         // The original completion helper passes null optional outputs and
         // ignores this IOReturn. GOP exposes no hardware completion telemetry.
@@ -651,7 +665,6 @@ public:
     LEAF(306)
     LEAF(307)
     LEAF(338)
-    LEAF(345)
 #undef LEAF
 };
 OSDefineMetaClassAndStructors(NativeLegacyDisplay,IOMobileFramebufferLegacy)
