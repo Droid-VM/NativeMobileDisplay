@@ -12,6 +12,8 @@
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSNumber.h>
 #include <pexpert/pexpert.h>
 extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned,void *,void *);
 extern "C" IOService *native_legacy_display_allocate(void);
@@ -281,7 +283,19 @@ public:
     }
     bool start(IOService *provider) override {
         if(!startDisplay(provider))return false;
+        publishOneLayer();
         startVsync();startDirect();return true;
+    }
+    // CoreAnimation reads how many layers the display scans out from IOMFBNumLayers (MaxNumLayers, AppleDisplay::update_display_limits).
+    // Without the property it may hand a full-screen layer (an app's Metal layer) to the display as a layer of its own: a detached layer,
+    // which it copies through the IOSurfaceAccelerator scaler into a surface the display takes. There is no scaler here, and backboardd
+    // aborts ("Failed to create IOSurfaceAccelerator"). This display scans out one composited layer.
+    void publishOneLayer() {
+        OSDictionary *layers=OSDictionary::withCapacity(1);
+        OSNumber *count=OSNumber::withNumber(1ULL,32);
+        if(layers && count && layers->setObject("MaxNumLayers",count))setProperty("IOMFBNumLayers",layers);
+        if(count)count->release();
+        if(layers)layers->release();
     }
     bool startDisplay(IOService *provider) {
         if(!IOMobileFramebufferLegacy::start(provider))return false;
