@@ -108,7 +108,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     const OriginalLegacySwapRequest *gpuRequest=nullptr;
     uint64_t gpuLength=0;
     bool gpuBypass=false;
-    // The swap of the frame the GPU client is copying already retired (boot-arg sheng-early-retire, default 1).
+    // Diagnostic early retirement only (sheng-early-retire=1); normal swaps retire after the GPU copy.
     bool gpuRetired=false;
     // The refresh tick runs on the family's work loop, the loop of the command gate that registers and removes the vsync clients, so the
     // client queue at +5592 never changes while the sender walks it.
@@ -432,11 +432,11 @@ public:
             // The GPU writes the scanout memory behind the CPU's back: the differential copy's picture of it is stale from now on.
             native_legacy_swap_stage(1);
             shadowValid=false;gpuRequest=request;gpuLength=length;transferred=true;
-            // The compositor renders the next frame only after this swap retires, so retiring at the end of the copy serialized render and
-            // copy (int-243: about 4.4 ms render then about 3 ms copy per frame). Retire now: the presenter holds its own reference to this
-            // frame's memory, the previous frame's copy has finished (transferred held this one back), and the next swap still waits for
-            // the copy because transferred stays set until finishGpuSwap.
-            unsigned early=1;PE_parse_boot_argn("sheng-early-retire",&early,sizeof(early));
+            // Retaining the memory only prevents deallocation; it does not prevent the
+            // compositor from overwriting its contents after retirement. Normal completion
+            // must wait for finishGpuSwap, when the consumer has finished reading it.
+            // Keep early retirement solely as an explicitly unsafe diagnostic override.
+            unsigned early=0;PE_parse_boot_argn("sheng-early-retire",&early,sizeof(early));
             if(early==1 && retireSwap(request,true)) {
                 gpuRetired=true;native_legacy_early_retires=native_legacy_early_retires+1;
             }
