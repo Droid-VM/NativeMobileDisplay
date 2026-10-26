@@ -41,6 +41,12 @@ extern "C" bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *,uint6
 extern "C" void native_legacy_gpu_fallback_observed(int status);
 // Swaps retired when the GPU client took the frame (before its copy finished), and copies that then failed after such a retirement.
 extern "C" {volatile uint64_t native_legacy_early_retires,native_legacy_early_failures;}
+// Whether the GPU client that just took a frame lets its swap retire at once (a platform hook; by default no). Retiring a swap
+// releases the frame before it, not the one offered: the offered frame stays this class's until the client reports it
+// (native_legacy_gpu_complete), and only then is the next frame offered. So a client may say yes when it has finished reading the
+// previous frame before it takes the next one -- a consumer that copies each frame out by the time it reports it. The render
+// server then draws the next frame while this one is still on its way, instead of waiting for its whole trip.
+extern "C" __attribute__((weak)) bool native_legacy_gpu_retires_on_offer(void *display) {(void)display;return false;}
 // Swaps the family gave up on after waiting 5 s for them (cancelSwapsAfterTimeout).
 extern "C" {volatile uint64_t native_legacy_swap_timeouts;}
 // Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
@@ -316,10 +322,11 @@ public:
             shadowValid=false;gpuRequest=request;gpuLength=length;transferred=true;
             // Retaining the memory only prevents deallocation; it does not prevent the
             // compositor from overwriting its contents after retirement. Normal completion
-            // must wait for finishGpuSwap, when the consumer has finished reading it.
-            // Keep early retirement solely as an explicitly unsafe diagnostic override.
+            // must wait for finishGpuSwap, when the consumer has finished reading it -- unless
+            // the client says it is done with the previous frame (native_legacy_gpu_retires_on_offer).
+            // Otherwise early retirement is an explicitly unsafe diagnostic override.
             unsigned early=0;PE_parse_boot_argn("sheng-early-retire",&early,sizeof(early));
-            if(early==1 && retireSwap(request,true)) {
+            if((early==1 || native_legacy_gpu_retires_on_offer(this)) && retireSwap(request,true)) {
                 gpuRetired=true;native_legacy_early_retires=native_legacy_early_retires+1;
             }
             return;
