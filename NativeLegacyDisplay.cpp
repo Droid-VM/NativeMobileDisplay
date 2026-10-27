@@ -77,12 +77,17 @@ extern "C" {volatile uint64_t native_legacy_early_retires,native_legacy_early_fa
 extern "C" __attribute__((weak)) bool native_legacy_gpu_retires_on_offer(void *display) {(void)display;return false;}
 // Swaps the family gave up on after waiting 5 s for them (cancelSwapsAfterTimeout).
 extern "C" {volatile uint64_t native_legacy_swap_timeouts;}
-// Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
+// Display refresh tick (native_legacy_refresh_hz(): boot-arg sheng-vsync=<Hz> by default, 0: off). The original family sends the compositor's vsync message (type 5)
 // through native_legacy_vsync_notify, the unchanged original sender, but only a platform subclass calls it from the panel's vblank and
 // that subclass is not part of this port: without it the render server never saw a vsync. The GOP scanout has no vblank interrupt, so a
 // work-loop timer stands in for it while at least one client has vsync notifications enabled. Events: 0 armed, 1 sent, 2 idle (no client),
 // 3 late (deadline passed, cadence restarted), 4 started, 5 refresh properties reported at that rate.
 extern "C" void native_legacy_vsync_notify(void *display,uint64_t timestamp,uint64_t continuousTime,uint64_t interval);
+// The panel's refresh rate in Hz for the tick and the refresh properties below (0: none, the render server's own 1/60 s). By default
+// boot-arg sheng-vsync; a platform may answer otherwise (its display device's mode), letting the boot-arg still win.
+extern "C" __attribute__((weak)) unsigned native_legacy_refresh_hz(void) {
+    unsigned hz=0;PE_parse_boot_argn("sheng-vsync",&hz,sizeof(hz));return hz;
+}
 // The unchanged original setDisplayRefreshProperties: publishes IOMFBDisplayRefresh from slot 301 (getRefreshAttributes below).
 extern "C" bool native_legacy_set_refresh_properties(void *display);
 extern "C" void native_legacy_vsync_observed(unsigned event,unsigned hz);
@@ -237,7 +242,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         vsyncArmed=true;vsyncTimer->wakeAtTime(vsyncNext);
     }
     void startVsync() {
-        unsigned hz=0;PE_parse_boot_argn("sheng-vsync",&hz,sizeof(hz));
+        unsigned hz=native_legacy_refresh_hz();
         if(!hz || hz>240 || !primary || !bootMapping || vsyncTimer)return;
         IOWorkLoop *loop=getWorkLoop();
         if(!loop)return;
@@ -339,20 +344,20 @@ public:
         unsigned enabled=0;PE_parse_boot_argn("offline-legacy-register",&enabled,sizeof(enabled));
         if(enabled!=1)native_legacy_backend_guard(84,this,__builtin_return_address(0));
         // Nothing in the family publishes IOMFBDisplayRefresh (its platform subclass does), and without it the render server keeps its own
-        // 1/60 s heartbeat (int-210: refresh=0). Publish it before any client can find the display, only when sheng-vsync asks for more.
-        unsigned hz=0;PE_parse_boot_argn("sheng-vsync",&hz,sizeof(hz));
+        // 1/60 s heartbeat (int-210: refresh=0). Publish it before any client can find the display, only for a refresh rate above 60 Hz.
+        unsigned hz=native_legacy_refresh_hz();
         if(primary && hz>60 && hz<=240)native_legacy_set_refresh_properties(this);
         IOService::registerService(options);native_legacy_registration_observed(this);
     }
     bool isMainDisplay() override {return primary;}
     // The render server paces its display timer by the minimum refresh interval in IOMFBDisplayRefresh (int-209: no vsync client ever
-    // registered, frames came every 16.7 ms), and the generic slot 301 fixes it at 1/60 s. With sheng-vsync=<Hz> it reports the panel's
+    // registered, frames came every 16.7 ms), and the generic slot 301 fixes it at 1/60 s. With a refresh rate above 60 Hz it reports the panel's
     // own rate instead; the maximum interval and the step keep the original values. Words in 32.32 seconds, then their mach times.
-    // The original maximum interval is 1/24 s (int-240), which offers the render server a 24 to sheng-vsync Hz range. The panel has no
+    // The original maximum interval is 1/24 s (int-240), which offers the render server a range from 24 Hz to the panel's. The panel has no
     // variable refresh, so sheng-vsync-fixed=1 reports the maximum interval equal to the minimum: one fixed rate.
     bool getRefreshAttributes(uint64_t *words,bool fixed) override {
         if(!IOMobileFramebufferLegacy::getRefreshAttributes(words,fixed) || !words)return false;
-        unsigned hz=0;PE_parse_boot_argn("sheng-vsync",&hz,sizeof(hz));
+        unsigned hz=native_legacy_refresh_hz();
         if(hz<=60 || hz>240)return true;
         unsigned locked=0;PE_parse_boot_argn("sheng-vsync-fixed",&locked,sizeof(locked));
         const uint64_t interval=(1ull<<32)/hz;
